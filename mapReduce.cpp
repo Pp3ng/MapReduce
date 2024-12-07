@@ -14,6 +14,8 @@
 #include <ranges>
 #include <barrier>
 #include <syncstream>
+#include <locale>
+#include <codecvt>
 
 class WordCounter
 {
@@ -24,15 +26,17 @@ private:
     // unordered map to store word counts
     std::unordered_map<std::string, int> wordCounts;
 
-    // convert string to lowercase using ranges
-    static void toLowerCase(std::string &str)
+    // convert string to lowercase using ranges and locale
+    static void toLowerCase(std::wstring &wstr)
     {
-        std::ranges::transform(str, str.begin(), ::tolower);
+        std::ranges::transform(wstr, wstr.begin(), ::towlower);
     }
 
     // add a word to the word counts map in a thread-safe manner
-    void addWord(const std::string &word)
+    void addWord(const std::wstring &wword)
     {
+        std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+        std::string word = converter.to_bytes(wword);
         std::unique_lock<std::shared_mutex> lock(mutex);
         wordCounts[word]++;
     }
@@ -61,22 +65,25 @@ private:
             auto lines = std::ranges::istream_view<std::string>(file) | std::ranges::views::filter([](const std::string &line)
                                                                                                    { return !line.empty(); });
 
-            // regex to match words
-            std::regex wordRegex(R"(\w+|[^\w\s])");
+            // regex to match words in different languages
+            std::wregex wordRegex(LR"(\w+|[^\w\s])");
 
             // process each line
             for (const auto &line : lines)
             {
-                std::sregex_iterator words_begin = std::sregex_iterator(line.begin(), line.end(), wordRegex);
-                std::sregex_iterator words_end = std::sregex_iterator();
+                std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+                std::wstring wline = converter.from_bytes(line);
 
-                for (std::sregex_iterator i = words_begin; i != words_end; ++i)
+                std::wsregex_iterator words_begin = std::wsregex_iterator(wline.begin(), wline.end(), wordRegex);
+                std::wsregex_iterator words_end = std::wsregex_iterator();
+
+                for (std::wsregex_iterator i = words_begin; i != words_end; ++i)
                 {
-                    std::string word = (*i).str();
-                    toLowerCase(word);
-                    if (!word.empty())
+                    std::wstring wword = (*i).str();
+                    toLowerCase(wword);
+                    if (!wword.empty())
                     {
-                        addWord(word);
+                        addWord(wword);
                     }
                 }
             }
