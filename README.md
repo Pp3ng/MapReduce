@@ -12,13 +12,14 @@ This is a multi-threaded word count program written in C++. The program uses a M
 - Uses regular expressions to match words, supporting various text formats
 - Thread-safe word counting
 - Results sorted alphabetically
+- Uses C++20 features such as ranges and barriers for improved performance and readability
 
 ## Usage
 
 1. Compile the program:
 
    ```
-   g++ -std=c++17 -pthread mapReduce.cpp -o wordcount
+   g++ -std=c++20 -pthread mapReduce.cpp -o wordcount
    ```
 
 2. Run the program:
@@ -47,8 +48,8 @@ the: 200
 
 ## Dependencies
 
-- C++17
-- Compiler supporting `<filesystem>`
+- C++20
+- Compiler supporting `<filesystem>` `<ranges>` and `<barrier>` headers
 
 ## Notes
 

@@ -12,123 +12,161 @@
 #include <mutex>
 #include <regex>
 #include <ranges>
+#include <barrier>
+#include <syncstream>
 
-// global shared mutex for thread-safe access to wordCounts
-std::shared_mutex mutex;
-// global unordered map to store word counts
-std::unordered_map<std::string, int> wordCounts;
-
-// function to convert a string to lowercase
-void toLowerCase(std::string &str)
+class WordCounter
 {
-    std::ranges::transform(str, str.begin(), ::tolower);
-}
+private:
+    // shared mutex for thread-safe access to word counts
+    std::shared_mutex mutex;
 
-// function to add a word to the wordCounts map in a thread-safe manner
-void addWord(const std::string &word)
-{
-    std::unique_lock<std::shared_mutex> lock(mutex);
-    wordCounts[word]++;
-}
+    // unordered map to store word counts
+    std::unordered_map<std::string, int> wordCounts;
 
-// function to process a file and count the words
-void mapFile(const std::string &filename)
-{
-    try
+    // convert string to lowercase using ranges
+    static void toLowerCase(std::string &str)
     {
-        // check if the file exists
-        if (!std::filesystem::exists(filename))
-        {
-            std::cerr << "file does not exist: " << filename << std::endl;
-            return;
-        }
+        std::ranges::transform(str, str.begin(), ::tolower);
+    }
 
-        // open the file
-        std::ifstream file(filename);
-        if (!file.is_open())
-        {
-            std::cerr << "cannot open file: " << filename << std::endl;
-            return;
-        }
+    // add a word to the word counts map in a thread-safe manner
+    void addWord(const std::string &word)
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex);
+        wordCounts[word]++;
+    }
 
-        std::string line;
-        // regex to match words
-        std::regex wordRegex(R"(\w+|[^\w\s])");
-        // read the file line by line
-        while (std::getline(file, line))
+    // process a single file and count words
+    void processFile(const std::string &filename)
+    {
+        try
         {
-            // find all words in the line
-            auto words_begin = std::sregex_iterator(line.begin(), line.end(), wordRegex);
-            auto words_end = std::sregex_iterator();
-
-            // process each word
-            for (std::sregex_iterator i = words_begin; i != words_end; ++i)
+            // check if file exists
+            if (!std::filesystem::exists(filename))
             {
-                std::string word = (*i).str();
-                toLowerCase(word); // convert word to lowercase
-                if (!word.empty())
+                std::osyncstream(std::cerr) << "File does not exist: " << filename << std::endl;
+                return;
+            }
+
+            // open file
+            std::ifstream file(filename);
+            if (!file.is_open())
+            {
+                std::osyncstream(std::cerr) << "Cannot open file: " << filename << std::endl;
+                return;
+            }
+
+            // use ranges to read and process lines
+            auto lines = std::ranges::istream_view<std::string>(file) | std::ranges::views::filter([](const std::string &line)
+                                                                                                   { return !line.empty(); });
+
+            // regex to match words
+            std::regex wordRegex(R"(\w+|[^\w\s])");
+
+            // process each line
+            for (const auto &line : lines)
+            {
+                std::sregex_iterator words_begin = std::sregex_iterator(line.begin(), line.end(), wordRegex);
+                std::sregex_iterator words_end = std::sregex_iterator();
+
+                for (std::sregex_iterator i = words_begin; i != words_end; ++i)
                 {
-                    addWord(word); // add word to the map
+                    std::string word = (*i).str();
+                    toLowerCase(word);
+                    if (!word.empty())
+                    {
+                        addWord(word);
+                    }
                 }
             }
         }
-        file.close(); // close the file
+        catch (const std::exception &e)
+        {
+            std::osyncstream(std::cerr) << "Exception processing file "
+                                        << filename << ": " << e.what() << std::endl;
+        }
     }
-    catch (const std::exception &e)
+
+public:
+    // process multiple files using a barrier
+    void processFiles(const std::vector<std::string> &filenames)
     {
-        std::cerr << "exception in thread processing file " << filename << ": " << e.what() << std::endl;
+        // create a barrier to synchronize threads
+        std::size_t threadCount = filenames.size();
+        std::barrier sync_point(threadCount, [this]()
+                                {
+            // optional completion function - could be used for logging or additional processing
+            std::osyncstream(std::cout) << "All files processed." << std::endl; });
+
+        // vector to store futures
+        std::vector<std::future<void>> futures;
+
+        // launch a thread for each file
+        for (const auto &filename : filenames)
+        {
+            futures.emplace_back(std::async(std::launch::async, [this, &filename, &sync_point]()
+                                            {
+                processFile(filename);
+                // signal completion at the barrier
+                sync_point.arrive_and_wait(); }));
+        }
+
+        // wait for all threads to complete
+        for (auto &future : futures)
+        {
+            try
+            {
+                future.get();
+            }
+            catch (const std::exception &e)
+            {
+                std::osyncstream(std::cerr) << "Exception waiting for future: "
+                                            << e.what() << std::endl;
+            }
+        }
     }
-}
 
-// function to reduce the word counts and print them
-void reduce()
-{
-    std::shared_lock<std::shared_mutex> lock(mutex);
-    // copy wordCounts to a vector and sort it
-    std::vector<std::pair<std::string, int>> sortedWordCounts(wordCounts.begin(), wordCounts.end());
-    std::ranges::sort(sortedWordCounts);
-
-    // print the word counts
-    std::cout << "word counts:\n";
-    for (const auto &entry : sortedWordCounts)
+    // reduce and print word counts
+    void printWordCounts()
     {
-        std::cout << entry.first << ": " << entry.second << std::endl;
-    }
-}
+        std::shared_lock<std::shared_mutex> lock(mutex);
 
-int main(int argc, char *argv[])
+        std::vector<std::pair<std::string, int>> sortedWordCounts(wordCounts.begin(), wordCounts.end());
+        std::ranges::sort(sortedWordCounts);
+
+        std::osyncstream(std::cout) << "Word Counts:\n";
+        for (const auto &[word, count] : sortedWordCounts)
+        {
+            std::osyncstream(std::cout) << word << ": " << count << std::endl;
+        }
+    }
+};
+
+auto main(int argc, char *argv[]) -> int
 {
     // check if at least one file is provided
     if (argc < 2)
     {
-        std::cerr << "usage: " << argv[0] << " <file1> <file2> ... <fileN>\n";
+        std::cerr << "Usage: " << argv[0] << " <file1> <file2> ... <fileN>\n";
         return EXIT_FAILURE;
     }
 
-    int numFiles = argc - 1;
-    std::vector<std::future<void>> futures;
+    // create vector of filenames
+    std::vector<std::string> filenames(argv + 1, argv + argc);
 
-    // launch a thread for each file to process it
-    for (int i = 0; i < numFiles; ++i)
+    try
     {
-        futures.emplace_back(std::async(std::launch::async, mapFile, argv[i + 1]));
+        // create word counter and process files
+        WordCounter counter;
+        counter.processFiles(filenames);
+        counter.printWordCounts();
     }
-
-    // wait for all threads to finish
-    for (auto &f : futures)
+    catch (const std::exception &e)
     {
-        try
-        {
-            f.get();
-        }
-        catch (const std::exception &e)
-        {
-            std::cerr << "exception while waiting for future: " << e.what() << std::endl;
-        }
+        std::cerr << "Error: " << e.what() << std::endl;
+        return EXIT_FAILURE;
     }
-
-    // reduce the word counts and print them
-    reduce();
 
     return EXIT_SUCCESS;
 }
